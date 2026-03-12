@@ -1,0 +1,11 @@
+mejor numero abejas: 20 a 30, aumenta mucho tiempo de ejecucion por poca mejoria
+mejor limit: 40 para numero de abejas 20, es mejor que guarde alguna relacion proporcional con el numero de abejas
+mejor trial: 3 un buen balance entre ejecucion y costo final, afecta en gran medida el tiempo de ejecucion con su aumento pero no mejora tanto la solucion
+seed mode: nn, obtiene resultados relativamente mejores en menos tiempo
+
+
+Con base en los fundamentos del algoritmo Artificial Bee Colony (ABC) para optimización combinatoria, se espera que el tamaño de colonia sea uno de los hiperparámetros con mayor influencia en la calidad de solución, ya que controla la capacidad de exploración del espacio de búsqueda. En general, aumentar este parámetro mejora la probabilidad de encontrar mejores regiones, aunque con rendimientos decrecientes cuando el costo computacional crece más rápido que la mejora en el costo final. En esta línea, un rango intermedio de tamaño de colonia suele ofrecer un compromiso adecuado entre calidad y tiempo.
+
+El parámetro limit debe mantenerse en relación con el tamaño de colonia para equilibrar exploración y explotación: valores muy bajos provocan abandono prematuro de fuentes prometedoras, mientras que valores muy altos favorecen estancamiento en óptimos locales. Asimismo, incrementar neighborhood_trials tiende a elevar de forma importante el tiempo de ejecución por iteración, debido al mayor número de evaluaciones de vecindad, sin garantizar mejoras proporcionales en calidad. Por tanto, valores moderados de este parámetro suelen ser preferibles en términos de eficiencia.
+
+Respecto a la inicialización, el uso de semillas heurísticas (por ejemplo, seed_mode = nn) suele acelerar la convergencia temprana frente a inicialización completamente aleatoria, al partir de soluciones de mejor calidad inicial. Finalmente, activar elite_local_search normalmente mejora la calidad final al reforzar la explotación alrededor de buenas soluciones, aunque a costa de mayor tiempo de cómputo; su conveniencia depende del objetivo del estudio (máxima calidad vs. tiempo de respuesta).
