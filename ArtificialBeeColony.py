@@ -160,7 +160,7 @@ def perturb(inst: VRPInstance, sol: VRPSolution, rng: random.Random) -> VRPSolut
 	if not routes:
 		return sol.copy()
 
-	op = rng.choice(["relocate", "swap", "reverse"])
+	op = rng.choice(["relocate", "swap", "reverse", "cross_exchange"])
 
 	if op == "reverse":
 		non_empty = [r for r in routes if len(r) >= 2]
@@ -182,6 +182,29 @@ def perturb(inst: VRPInstance, sol: VRPSolution, rng: random.Random) -> VRPSolut
 			new_b = route_demand(inst, routes[b_idx]) - inst.demands[b_c] + inst.demands[a_c]
 			if new_a <= inst.vehicle_capacity and new_b <= inst.vehicle_capacity:
 				routes[a_idx][a_pos], routes[b_idx][b_pos] = routes[b_idx][b_pos], routes[a_idx][a_pos]
+
+	elif op == "cross_exchange":
+		non_empty_idx = [i for i, r in enumerate(routes) if r]
+		if len(non_empty_idx) >= 2:
+			a_idx, b_idx = rng.sample(non_empty_idx, 2)
+			route_a = routes[a_idx]
+			route_b = routes[b_idx]
+
+			len_a = rng.randint(1, min(2, len(route_a)))
+			len_b = rng.randint(1, min(2, len(route_b)))
+
+			start_a = rng.randint(0, len(route_a) - len_a)
+			start_b = rng.randint(0, len(route_b) - len_b)
+
+			seg_a = route_a[start_a : start_a + len_a]
+			seg_b = route_b[start_b : start_b + len_b]
+
+			new_route_a = route_a[:start_a] + seg_b + route_a[start_a + len_a :]
+			new_route_b = route_b[:start_b] + seg_a + route_b[start_b + len_b :]
+
+			if route_demand(inst, new_route_a) <= inst.vehicle_capacity and route_demand(inst, new_route_b) <= inst.vehicle_capacity:
+				routes[a_idx] = new_route_a
+				routes[b_idx] = new_route_b
 
 	else:
 		non_empty_idx = [i for i, r in enumerate(routes) if r]

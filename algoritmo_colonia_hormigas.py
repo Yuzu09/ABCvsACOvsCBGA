@@ -1,240 +1,317 @@
-"""
-Implementación ACO para TSP con salida headless (imágenes + resumen de texto).
-"""
-
+"""ACO para VRP con salidas headless (imágenes + resumen de texto)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple, Dict, Any
-import argparse
+from typing import List, Tuple, Dict, Any, Optional
+import math
 import os
 import random
 import time
 import tracemalloc
 import resource
+import itertools
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 
+# ------------------------------------
+# Estructuras VRP
+# ------------------------------------
+
+@dataclass
+class VRPInstance:
+    coords: np.ndarray
+    demands: List[int]
+    vehicle_capacity: int
+    depot: int = 0
+
+
+@dataclass
+class VRPSolution:
+    routes: List[List[int]]
+    cost: float
+
+    def copy(self) -> "VRPSolution":
+        return VRPSolution(routes=[r[:] for r in self.routes], cost=self.cost)
+
+
+def euclidean(a: np.ndarray, b: np.ndarray) -> float:
+    return math.hypot(float(a[0] - b[0]), float(a[1] - b[1]))
+
+
+def route_cost(inst: VRPInstance, route: List[int]) -> float:
+    if not route:
+        return 0.0
+    cost = 0.0
+    prev = inst.depot
+    for customer in route:
+        cost += euclidean(inst.coords[prev], inst.coords[customer])
+        prev = customer
+    cost += euclidean(inst.coords[prev], inst.coords[inst.depot])
+    return cost
+
+
+def solution_cost(inst: VRPInstance, routes: List[List[int]]) -> float:
+    return sum(route_cost(inst, r) for r in routes)
+
+
+def route_demand(inst: VRPInstance, route: List[int]) -> int:
+    return sum(inst.demands[c] for c in route)
+
+
+def is_feasible(inst: VRPInstance, sol: VRPSolution) -> bool:
+    customers = list(range(len(inst.coords)))
+    customers.remove(inst.depot)
+    seen: List[int] = list(itertools.chain.from_iterable(sol.routes))
+    if sorted(seen) != customers:
+        return False
+    if len(set(seen)) != len(seen):
+        return False
+    for route in sol.routes:
+        if any(c == inst.depot for c in route):
+            return False
+        if route_demand(inst, route) > inst.vehicle_capacity:
+            return False
+    return True
+
+
+def build_random_vrp_instance(
+    n_customers: int = 40,
+    seed: int = 11,
+    capacity: int = 30,
+    demand_low: int = 1,
+    demand_high: int = 9,
+) -> VRPInstance:
+    rng = np.random.default_rng(seed)
+    coords = rng.random((n_customers + 1, 2), dtype=float)
+    demands = [0] + rng.integers(demand_low, demand_high + 1, size=n_customers).tolist()
+    return VRPInstance(coords=coords, demands=demands, vehicle_capacity=capacity, depot=0)
+
+
+# ------------------------------------
+# ACO para VRP
+# ------------------------------------
+
 @dataclass
 class ACOConfig:
-    num_hormigas: int = 5
+    n_ants: int = 20
     alpha: float = 1.0
-    beta: float = 5.0
-    rho: float = 0.3
+    beta: float = 3.0
+    evaporation: float = 0.3
     q: float = 100.0
-    iteraciones: int = 300
+    max_iters: int = 300
     feromona_inicial: float = 1.0
     seed: int = 11
 
 
-class ACOTSPSolver:
+class ACOVRPSolver:
     def __init__(self, config: ACOConfig):
         self.config = config
         self.rng = random.Random(config.seed)
-        np.random.seed(config.seed)
 
-    @staticmethod
-    def calcular_distancia_tour(tour: List[int], matriz_distancias: np.ndarray) -> float:
-        distancia = 0.0
-        for i in range(len(tour)):
-            ciudad_actual = tour[i]
-            ciudad_siguiente = tour[(i + 1) % len(tour)]
-            distancia += matriz_distancias[ciudad_actual][ciudad_siguiente]
-        return float(distancia)
+    def _build_solution(self, inst: VRPInstance, tau: np.ndarray) -> VRPSolution:
+        remaining = set(range(len(inst.coords)))
+        remaining.remove(inst.depot)
+        routes: List[List[int]] = []
 
-    def _construir_solucion_hormiga(
-        self,
-        num_ciudades: int,
-        matriz_distancias: np.ndarray,
-        matriz_feromonas: np.ndarray,
-    ) -> List[int]:
-        ciudad_actual = self.rng.randint(0, num_ciudades - 1)
-        tour = [ciudad_actual]
-        ciudades_no_visitadas = set(range(num_ciudades))
-        ciudades_no_visitadas.remove(ciudad_actual)
+        while remaining:
+            route: List[int] = []
+            current = inst.depot
+            load = 0
 
-        while ciudades_no_visitadas:
-            probabilidades = []
-            ciudades_disponibles = list(ciudades_no_visitadas)
+            while True:
+                feasible = [c for c in remaining if load + inst.demands[c] <= inst.vehicle_capacity]
+                if not feasible:
+                    break
 
-            for ciudad in ciudades_disponibles:
-                feromona = matriz_feromonas[ciudad_actual][ciudad] ** self.config.alpha
-                distancia = matriz_distancias[ciudad_actual][ciudad]
-                if distancia == 0:
-                    distancia = 1e-4
-                heuristica = (1.0 / distancia) ** self.config.beta
-                probabilidades.append(feromona * heuristica)
+                desirabilities = []
+                for c in feasible:
+                    pher = tau[current, c] ** self.config.alpha
+                    dist = euclidean(inst.coords[current], inst.coords[c])
+                    heur = (1.0 / (dist + 1e-9)) ** self.config.beta
+                    desirabilities.append(pher * heur)
 
-            suma_prob = sum(probabilidades)
-            if suma_prob == 0:
-                probabilidades = [1.0] * len(probabilidades)
-                suma_prob = float(len(probabilidades))
+                total = sum(desirabilities)
+                if total <= 0:
+                    chosen = self.rng.choice(feasible)
+                else:
+                    probs = [d / total for d in desirabilities]
+                    chosen = self.rng.choices(feasible, weights=probs, k=1)[0]
 
-            probabilidades = [p / suma_prob for p in probabilidades]
-            siguiente_ciudad = self.rng.choices(ciudades_disponibles, weights=probabilidades, k=1)[0]
+                route.append(chosen)
+                remaining.remove(chosen)
+                load += inst.demands[chosen]
+                current = chosen
 
-            tour.append(siguiente_ciudad)
-            ciudades_no_visitadas.remove(siguiente_ciudad)
-            ciudad_actual = siguiente_ciudad
+            # Si ningún cliente cupió (demanda > capacidad), forzar uno solo
+            if not route and remaining:
+                single = next(iter(remaining))
+                route = [single]
+                remaining.remove(single)
 
-        return tour
+            if route:
+                routes.append(route)
 
-    def _actualizar_feromonas(
-        self,
-        matriz_feromonas: np.ndarray,
-        tours: List[List[int]],
-        distancias: List[float],
-    ) -> None:
-        matriz_feromonas *= (1.0 - self.config.rho)
+        return VRPSolution(routes=routes, cost=solution_cost(inst, routes))
 
-        for tour, distancia in zip(tours, distancias):
-            if distancia <= 0:
-                continue
-            deposito = self.config.q / distancia
-            for i in range(len(tour)):
-                ciudad_actual = tour[i]
-                ciudad_siguiente = tour[(i + 1) % len(tour)]
-                matriz_feromonas[ciudad_actual][ciudad_siguiente] += deposito
-                matriz_feromonas[ciudad_siguiente][ciudad_actual] += deposito
+    def solve(self, inst: VRPInstance) -> Dict[str, Any]:
+        n = len(inst.coords)
+        tau = np.ones((n, n), dtype=float) * self.config.feromona_inicial
 
-    def solve(self, matriz_distancias: np.ndarray) -> Dict[str, Any]:
-        num_ciudades = len(matriz_distancias)
-        matriz_feromonas = np.ones((num_ciudades, num_ciudades), dtype=float) * self.config.feromona_inicial
-
-        historial_fitness: List[float] = []
-        mejoras: List[Tuple[int, float, List[int]]] = []
-        mejor_global: List[int] | None = None
-        mejor_distancia_global = float("inf")
+        best: Optional[VRPSolution] = None
+        history: List[float] = []
+        improvements: List[Tuple[int, float, List[List[int]]]] = []
 
         tracemalloc.start()
         wall_start = time.perf_counter()
         cpu_start = time.process_time()
 
-        for iteracion in range(self.config.iteraciones):
-            tours: List[List[int]] = []
-            distancias: List[float] = []
+        for iteration in range(1, self.config.max_iters + 1):
+            ants = [self._build_solution(inst, tau) for _ in range(self.config.n_ants)]
+            iter_best = min(ants, key=lambda s: s.cost)
 
-            for _ in range(self.config.num_hormigas):
-                tour = self._construir_solucion_hormiga(num_ciudades, matriz_distancias, matriz_feromonas)
-                distancia = self.calcular_distancia_tour(tour, matriz_distancias)
-                tours.append(tour)
-                distancias.append(distancia)
+            if best is None or iter_best.cost < best.cost:
+                best = iter_best.copy()
+                improvements.append((iteration, best.cost, [r[:] for r in best.routes]))
 
-                if distancia < mejor_distancia_global:
-                    mejor_distancia_global = distancia
-                    mejor_global = tour[:]
-                    mejoras.append((iteracion + 1, mejor_distancia_global, mejor_global[:]))
+            # Evaporación
+            tau *= (1.0 - self.config.evaporation)
 
-            self._actualizar_feromonas(matriz_feromonas, tours, distancias)
-            historial_fitness.append(mejor_distancia_global)
+            # Depósito de feromona
+            for sol in ants:
+                if sol.cost <= 0:
+                    continue
+                deposit = self.config.q / sol.cost
+                for route in sol.routes:
+                    prev = inst.depot
+                    for c in route:
+                        tau[prev, c] += deposit
+                        tau[c, prev] += deposit
+                        prev = c
+                    tau[prev, inst.depot] += deposit
+                    tau[inst.depot, prev] += deposit
+
+            history.append(best.cost)
 
         wall_end = time.perf_counter()
         cpu_end = time.process_time()
         mem_current, mem_peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
 
+        if not improvements and best is not None:
+            improvements = [(0, best.cost, [r[:] for r in best.routes])]
+
         return {
-            "mejor_ruta": mejor_global,
-            "mejor_distancia": mejor_distancia_global,
-            "historial_fitness": historial_fitness,
-            "mejoras": mejoras,
-            "tiempo_wall": wall_end - wall_start,
-            "tiempo_cpu": cpu_end - cpu_start,
-            "memoria_actual": mem_current,
-            "memoria_pico": mem_peak,
-            "rss_pico_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "best_solution": best,
+            "best_cost": best.cost if best is not None else float("inf"),
+            "history": history,
+            "improvements": improvements,
+            "time_wall": wall_end - wall_start,
+            "time_cpu": cpu_end - cpu_start,
+            "mem_current": mem_current,
+            "mem_peak": mem_peak,
+            "rss_peak_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "feasible": is_feasible(inst, best) if best is not None else False,
             "config": self.config,
         }
 
 
-def _infer_coordinates_from_distance_matrix(matriz_distancias: np.ndarray, seed: int = 0) -> np.ndarray:
-    n = len(matriz_distancias)
-    rng = np.random.default_rng(seed)
-    return rng.random((n, 2), dtype=float)
+# ------------------------------------
+# Salidas
+# ------------------------------------
+
+def _next_indexed_path(output_dir: str, prefix: str, base: str, ext: str) -> str:
+    idx = 1
+    while True:
+        p = os.path.join(output_dir, f"{prefix}_{base}{idx}.{ext}")
+        if not os.path.exists(p):
+            return p
+        idx += 1
 
 
 def _save_outputs(
-    matriz_distancias: np.ndarray,
-    resultado: Dict[str, Any],
+    inst: VRPInstance,
+    result: Dict[str, Any],
     output_dir: str,
     output_prefix: str,
-    seed: int,
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
-    mejor_ruta = resultado["mejor_ruta"]
-    historial = resultado["historial_fitness"]
+    best: VRPSolution = result["best_solution"]
+    history: List[float] = result["history"]
 
-    # Imagen 1: mejor ruta (layout sintético para visualizar en TSP genérico)
-    coords = _infer_coordinates_from_distance_matrix(matriz_distancias, seed=seed)
+    # Imagen 1: rutas VRP coloreadas
     fig1, ax1 = plt.subplots()
     ax1.set_aspect("equal", adjustable="box")
-    ax1.set_title("ACO (TSP) - Mejor ruta final")
+    ax1.set_title("ACO (VRP) - Mejor solución final")
     ax1.set_xlabel("x")
     ax1.set_ylabel("y")
-    ax1.scatter(coords[:, 0], coords[:, 1])
-
-    if mejor_ruta:
-        xs = [coords[i, 0] for i in mejor_ruta] + [coords[mejor_ruta[0], 0]]
-        ys = [coords[i, 1] for i in mejor_ruta] + [coords[mejor_ruta[0], 1]]
-        ax1.plot(xs, ys, linewidth=1)
-
-    best_route_img = os.path.join(output_dir, f"{output_prefix}_best_route.png")
+    ax1.scatter(inst.coords[1:, 0], inst.coords[1:, 1], label="Clientes", s=15)
+    ax1.scatter(inst.coords[inst.depot, 0], inst.coords[inst.depot, 1],
+                c="red", zorder=5, label="Depósito", s=40)
+    colors = plt.cm.tab20(np.linspace(0, 1, max(1, len(best.routes))))
+    for ridx, route in enumerate(best.routes):
+        if not route:
+            continue
+        xs = ([inst.coords[inst.depot, 0]]
+              + [inst.coords[c, 0] for c in route]
+              + [inst.coords[inst.depot, 0]])
+        ys = ([inst.coords[inst.depot, 1]]
+              + [inst.coords[c, 1] for c in route]
+              + [inst.coords[inst.depot, 1]])
+        ax1.plot(xs, ys, linewidth=1.2, color=colors[ridx])
+    ax1.legend(loc="best", fontsize=8)
+    best_route_img = _next_indexed_path(output_dir, output_prefix, "best_routes", "png")
     fig1.savefig(best_route_img, dpi=180, bbox_inches="tight")
     plt.close(fig1)
 
-    # Imagen 2: convergencia
+    # Imagen 2: convergencia (incremental)
     fig2, ax2 = plt.subplots()
-    ax2.set_title("ACO (TSP) - Convergencia")
+    ax2.set_title("ACO (VRP) - Convergencia")
     ax2.set_xlabel("Iteración")
-    ax2.set_ylabel("Mejor distancia")
-    ax2.plot(range(1, len(historial) + 1), historial, linewidth=1)
-    conv_img = os.path.join(output_dir, f"{output_prefix}_convergence.png")
+    ax2.set_ylabel("Mejor costo")
+    ax2.plot(range(1, len(history) + 1), history, linewidth=1)
+    conv_img = _next_indexed_path(output_dir, output_prefix, "convergence", "png")
     fig2.savefig(conv_img, dpi=180, bbox_inches="tight")
     plt.close(fig2)
 
-    # Reporte incremental summaryN
-    report_index = 1
-    while True:
-        candidate_report = os.path.join(output_dir, f"{output_prefix}_summary{report_index}.txt")
-        if not os.path.exists(candidate_report):
-            report_path = candidate_report
-            break
-        report_index += 1
-
-    config: ACOConfig = resultado["config"]
+    # Reporte incremental
+    report_path = _next_indexed_path(output_dir, output_prefix, "summary", "txt")
+    config: ACOConfig = result["config"]
     with open(report_path, "w", encoding="utf-8") as rep:
-        rep.write("ACO para TSP - Resumen de ejecución\n")
+        rep.write("ACO para VRP - Resumen de ejecución\n")
         rep.write("=" * 40 + "\n")
-        rep.write(f"Ciudades: {len(matriz_distancias)}\n")
-        rep.write(f"Hormigas: {config.num_hormigas}\n")
+        rep.write(f"Clientes: {len(inst.coords) - 1}\n")
+        rep.write(f"Capacidad vehículo: {inst.vehicle_capacity}\n")
+        rep.write(f"Hormigas: {config.n_ants}\n")
         rep.write(f"Alpha: {config.alpha}\n")
         rep.write(f"Beta: {config.beta}\n")
-        rep.write(f"Rho: {config.rho}\n")
+        rep.write(f"Evaporación: {config.evaporation}\n")
         rep.write(f"Q: {config.q}\n")
-        rep.write(f"Iteraciones: {config.iteraciones}\n")
+        rep.write(f"Max iters: {config.max_iters}\n")
         rep.write(f"Feromona inicial: {config.feromona_inicial}\n")
         rep.write(f"Seed: {config.seed}\n\n")
 
         rep.write("Recursos consumidos\n")
         rep.write("-" * 20 + "\n")
-        rep.write(f"Tiempo de ejecución (wall): {resultado['tiempo_wall']:.6f} s\n")
-        rep.write(f"Tiempo de CPU: {resultado['tiempo_cpu']:.6f} s\n")
-        rep.write(f"Memoria actual (tracemalloc): {resultado['memoria_actual'] / (1024 * 1024):.3f} MiB\n")
-        rep.write(f"Memoria pico (tracemalloc): {resultado['memoria_pico'] / (1024 * 1024):.3f} MiB\n")
-        rep.write(f"RSS pico del proceso: {resultado['rss_pico_kb']} KiB\n\n")
+        rep.write(f"Tiempo de ejecución (wall): {result['time_wall']:.6f} s\n")
+        rep.write(f"Tiempo de CPU: {result['time_cpu']:.6f} s\n")
+        rep.write(f"Memoria actual (tracemalloc): {result['mem_current'] / (1024 * 1024):.3f} MiB\n")
+        rep.write(f"Memoria pico (tracemalloc): {result['mem_peak'] / (1024 * 1024):.3f} MiB\n")
+        rep.write(f"RSS pico del proceso: {result['rss_peak_kb']} KiB\n\n")
 
         rep.write("Resultado final\n")
         rep.write("-" * 20 + "\n")
-        rep.write(f"Mejor distancia final: {resultado['mejor_distancia']:.6f}\n")
-        rep.write(f"Mejor ruta final: {resultado['mejor_ruta']}\n\n")
+        rep.write(f"Mejor costo final: {result['best_cost']:.6f}\n")
+        rep.write(f"Factible: {result['feasible']}\n")
+        rep.write(f"Número de rutas: {len(best.routes)}\n")
+        rep.write(f"Rutas finales: {best.routes}\n\n")
 
-        rep.write("Mejores rutas a lo largo de la ejecución\n")
+        rep.write("Mejoras a lo largo de la ejecución\n")
         rep.write("-" * 36 + "\n")
-        for iteracion, distancia, ruta in resultado["mejoras"]:
-            rep.write(f"iter={iteracion:4d} | dist={distancia:.6f} | route={ruta}\n")
+        for iteration, cost, routes in result["improvements"]:
+            rep.write(f"iter={iteration:4d} | cost={cost:.6f} | routes={routes}\n")
 
         rep.write("\nArchivos generados\n")
         rep.write("-" * 20 + "\n")
@@ -243,135 +320,66 @@ def _save_outputs(
         rep.write(f"{report_path}\n")
 
 
-def ejecutar_aco_tsp(
-    matriz_distancias: np.ndarray,
-    config: ACOConfig | None = None,
+def run_aco_vrp(
+    n_customers: int = 60,
+    capacity: int = 35,
+    seed: int = 11,
+    config: Optional[ACOConfig] = None,
     output_dir: str = "outputs",
-    output_prefix: str = "aco_tsp",
+    output_prefix: str = "aco_vrp",
     save_outputs: bool = True,
     show_plot: bool = False,
 ) -> Dict[str, Any]:
     if config is None:
-        config = ACOConfig()
+        config = ACOConfig(seed=seed)
 
     if save_outputs and not show_plot:
         plt.switch_backend("Agg")
 
-    solver = ACOTSPSolver(config)
-    resultado = solver.solve(matriz_distancias)
+    inst = build_random_vrp_instance(n_customers=n_customers, seed=seed, capacity=capacity)
+    solver = ACOVRPSolver(config)
+    result = solver.solve(inst)
 
     if save_outputs:
-        _save_outputs(
-            matriz_distancias=matriz_distancias,
-            resultado=resultado,
-            output_dir=output_dir,
-            output_prefix=output_prefix,
-            seed=config.seed,
-        )
+        _save_outputs(inst, result, output_dir, output_prefix)
 
-    if show_plot and resultado["mejor_ruta"]:
-        coords = _infer_coordinates_from_distance_matrix(matriz_distancias, seed=config.seed)
+    if show_plot and result["best_solution"] is not None:
+        best: VRPSolution = result["best_solution"]
         fig, ax = plt.subplots()
         ax.set_aspect("equal", adjustable="box")
-        ax.set_title("ACO (TSP) - Mejor ruta final")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.scatter(coords[:, 0], coords[:, 1])
-        ruta = resultado["mejor_ruta"]
-        xs = [coords[i, 0] for i in ruta] + [coords[ruta[0], 0]]
-        ys = [coords[i, 1] for i in ruta] + [coords[ruta[0], 1]]
-        ax.plot(xs, ys, linewidth=1)
+        ax.set_title("ACO (VRP) - Mejor solución final")
+        ax.scatter(inst.coords[1:, 0], inst.coords[1:, 1], s=15)
+        ax.scatter(inst.coords[inst.depot, 0], inst.coords[inst.depot, 1], c="red", s=40)
+        for route in best.routes:
+            xs = ([inst.coords[inst.depot, 0]]
+                  + [inst.coords[c, 0] for c in route]
+                  + [inst.coords[inst.depot, 0]])
+            ys = ([inst.coords[inst.depot, 1]]
+                  + [inst.coords[c, 1] for c in route]
+                  + [inst.coords[inst.depot, 1]])
+            ax.plot(xs, ys, linewidth=1)
         plt.show()
 
-    return resultado
-
-
-def algoritmo_colonia_hormigas(matriz_distancias, params):
-    """
-    Envoltura de compatibilidad con la interfaz anterior.
-    Retorna: (mejor_ruta, mejor_distancia, historial_fitness)
-    """
-    config = ACOConfig(
-        num_hormigas=getattr(params, "num_hormigas", 20),
-        alpha=getattr(params, "alpha", 1.0),
-        beta=getattr(params, "beta", 3.0),
-        rho=getattr(params, "rho", 0.3),
-        q=getattr(params, "q", 100.0),
-        iteraciones=getattr(params, "iteraciones", 120),
-        feromona_inicial=getattr(params, "feromona_inicial", 1.0),
-        seed=getattr(params, "seed", 11),
-    )
-
-    resultado = ejecutar_aco_tsp(
-        matriz_distancias=np.array(matriz_distancias, dtype=float),
-        config=config,
-        output_dir="outputs",
-        output_prefix="aco_tsp",
-        save_outputs=True,
-        show_plot=False,
-    )
-
-    return resultado["mejor_ruta"], resultado["mejor_distancia"], resultado["historial_fitness"]
-
-
-def _build_random_distance_matrix(n_ciudades: int, seed: int) -> np.ndarray:
-    rng = np.random.default_rng(seed)
-    coords = rng.random((n_ciudades, 2), dtype=float)
-    matriz = np.zeros((n_ciudades, n_ciudades), dtype=float)
-    for i in range(n_ciudades):
-        for j in range(n_ciudades):
-            matriz[i, j] = float(np.hypot(coords[i, 0] - coords[j, 0], coords[i, 1] - coords[j, 1]))
-    return matriz
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="ACO para TSP con salidas headless")
-    parser.add_argument("--n-ciudades", type=int, default=30, help="Cantidad de ciudades para instancia aleatoria")
-    parser.add_argument("--num-hormigas", type=int, default=5, help="Número de hormigas")
-    parser.add_argument("--alpha", type=float, default=1.0, help="Peso de feromona")
-    parser.add_argument("--beta", type=float, default=5.0, help="Peso heurístico")
-    parser.add_argument("--rho", type=float, default=0.3, help="Tasa de evaporación")
-    parser.add_argument("--q", type=float, default=100.0, help="Constante de depósito")
-    parser.add_argument("--iteraciones", type=int, default=300, help="Número de iteraciones")
-    parser.add_argument("--feromona-inicial", type=float, default=1.0, help="Valor inicial de feromona")
-    parser.add_argument("--seed", type=int, default=11, help="Semilla aleatoria")
-    parser.add_argument("--output-dir", default="outputs", help="Carpeta de salida")
-    parser.add_argument("--output-prefix", default="aco_tsp", help="Prefijo de archivos")
-    parser.add_argument("--show-plot", action="store_true", help="Mostrar figura en pantalla")
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-
-    matriz_distancias = _build_random_distance_matrix(args.n_ciudades, args.seed)
-    config = ACOConfig(
-        num_hormigas=args.num_hormigas,
-        alpha=args.alpha,
-        beta=args.beta,
-        rho=args.rho,
-        q=args.q,
-        iteraciones=args.iteraciones,
-        feromona_inicial=args.feromona_inicial,
-        seed=args.seed,
-    )
-
-    resultado = ejecutar_aco_tsp(
-        matriz_distancias=matriz_distancias,
-        config=config,
-        output_dir=args.output_dir,
-        output_prefix=args.output_prefix,
-        save_outputs=True,
-        show_plot=args.show_plot,
-    )
-
-    print("Ejecución ACO completada")
-    print(f"Mejor distancia: {resultado['mejor_distancia']:.6f}")
-    print(f"Mejor ruta: {resultado['mejor_ruta']}")
-    print(f"Convergencia: {os.path.join(args.output_dir, args.output_prefix + '_convergence.png')}")
-    print(f"Mejor ruta (imagen): {os.path.join(args.output_dir, args.output_prefix + '_best_route.png')}")
-    print("Resumen: archivo incremental *_summaryN.txt en outputs")
+    return result
 
 
 if __name__ == "__main__":
-    main()
+    run_aco_vrp(
+        n_customers=60,
+        capacity=35,
+        seed=11,
+        config=ACOConfig(
+            n_ants=5,
+            alpha=1.0,
+            beta=5.0,
+            evaporation=0.3,
+            q=100.0,
+            max_iters=200,
+            feromona_inicial=1.0,
+            seed=11,
+        ),
+        output_dir="outputs",
+        output_prefix="aco_vrp",
+        save_outputs=True,
+        show_plot=False,
+    )

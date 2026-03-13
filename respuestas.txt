@@ -1,0 +1,28 @@
+1) ¿Qué representa una solución del CVRP?
+
+Una solución del CVRP representa la planificación completa de distribución: 
+cómo se agrupan los clientes en distintas rutas y en qué orden se visitan dentro de cada ruta, 
+considerando que cada vehículo parte y regresa al depósito. En otras palabras, una solución no 
+solo indica qué clientes atender, sino también la asignación por vehículo y la secuencia de visita 
+de cada recorrido, con el objetivo de minimizar el costo total (distancia o tiempo) y cumplir las
+restricciones del problema.
+
+2) ¿Por qué una permutación simple de clientes no basta por sí sola?
+
+Una permutación simple de clientes (por ejemplo, [3, 8, 2, 1, 5, ...]) 
+solo define un orden global de visita, pero no define dónde termina una ruta
+y dónde empieza la siguiente. En CVRP se necesita, además del orden, 
+una partición en rutas (cortes) para cada vehículo. La misma permutación 
+puede producir soluciones muy distintas según dónde se hagan esos cortes, 
+y varias de esas particiones pueden ser inviables por capacidad. 
+Por eso, para representar directamente una solución CVRP, 
+se requiere orden + segmentación en rutas.
+
+3) ¿Qué papel juega la capacidad del vehículo?
+
+La capacidad del vehículo es la restricción de factibilidad más importante del CVRP. 
+En cada ruta, la suma de las demandas de los clientes asignados no puede superar la 
+capacidad máxima del vehículo. Esta restricción determina cuántos clientes pueden ir 
+en una misma ruta, cuántas rutas (o vehículos) se necesitan y cómo se debe dividir la 
+demanda total entre recorridos. En consecuencia, la capacidad influye directamente en 
+la estructura de la solución y en su costo final.
