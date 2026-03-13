@@ -439,9 +439,9 @@ def run_cbga_vrp(
 
 if __name__ == "__main__":
     run_cbga_vrp(
-        n_customers=60,
+        n_customers=100,
         capacity=35,
-        seed=19,
+        seed=2,
         config=CBGAConfig(
             population_size=40,
             generations=160,

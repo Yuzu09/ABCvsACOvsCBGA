@@ -365,9 +365,9 @@ def run_aco_vrp(
 
 if __name__ == "__main__":
     run_aco_vrp(
-        n_customers=60,
+        n_customers=100,
         capacity=35,
-        seed=11,
+        seed=2,
         config=ACOConfig(
             n_ants=5,
             alpha=1.0,

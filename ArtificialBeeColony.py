@@ -478,7 +478,7 @@ def run_abc_vrp(
 
 if __name__ == "__main__":
 	run_abc_vrp(
-		n_customers=60,
+		n_customers=100,
 		capacity=35,
 		seed=2,
 		config=ABCConfig(

@@ -1,7 +1,7 @@
 mejor numero abejas: 20 a 30, aumenta mucho tiempo de ejecucion por poca mejoria
 mejor limit: 40 para numero de abejas 20, es mejor que guarde alguna relacion proporcional con el numero de abejas
 mejor trial: 3 un buen balance entre ejecucion y costo final, afecta en gran medida el tiempo de ejecucion con su aumento pero no mejora tanto la solucion
-seed mode: nn, obtiene resultados relativamente mejores en menos tiempo
+seed mode: nn, obtiene resultados generalmente mejores en menos tiempo
 
 
 Con base en los fundamentos del algoritmo Artificial Bee Colony (ABC) para optimización combinatoria, se espera que el tamaño de colonia sea uno de los hiperparámetros con mayor influencia en la calidad de solución, ya que controla la capacidad de exploración del espacio de búsqueda. En general, aumentar este parámetro mejora la probabilidad de encontrar mejores regiones, aunque con rendimientos decrecientes cuando el costo computacional crece más rápido que la mejora en el costo final. En esta línea, un rango intermedio de tamaño de colonia suele ofrecer un compromiso adecuado entre calidad y tiempo.
