@@ -8,7 +8,7 @@ import os
 import random
 import time
 import tracemalloc
-import resource
+import psutil
 import itertools
 
 import numpy as np
@@ -334,7 +334,7 @@ class ABCVRPSolver:
 			"improvements": improvements,
 			"mem_current": mem_current,
 			"mem_peak": mem_peak,
-			"rss_peak_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+			"rss_peak_kb": psutil.Process().memory_info().rss / 1024,
 		}
 
 
