@@ -8,7 +8,7 @@ import os
 import random
 import time
 import tracemalloc
-import resource
+import psutil
 import itertools
 
 import numpy as np
@@ -211,7 +211,7 @@ class ACOVRPSolver:
             "time_cpu": cpu_end - cpu_start,
             "mem_current": mem_current,
             "mem_peak": mem_peak,
-            "rss_peak_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "rss_peak_kb": psutil.Process().memory_info().rss / 1024,
             "feasible": is_feasible(inst, best) if best is not None else False,
             "config": self.config,
         }
