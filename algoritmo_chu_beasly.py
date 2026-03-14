@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 import random
-import resource
+import psutil
 import time
 import tracemalloc
 import itertools
@@ -298,7 +298,7 @@ class CBGAVRPSolver:
             "time_cpu": cpu_end - cpu_start,
             "mem_current": mem_current,
             "mem_peak": mem_peak,
-            "rss_peak_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "rss_peak_kb": psutil.Process().memory_info().rss / 1024,
             "config": self.config,
             "feasible": is_feasible(inst, best_solution),
         }
